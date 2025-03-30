@@ -41,17 +41,17 @@ def calculate_contrast_index(x_values, y_values, window_size=7):
             best_points = (x[i], y[i], x[i+window_size-1], y[i+window_size-1])
     
     if best_points and abs(best_r_value) > 0.98:
-        film_a, density_a = best_points[0], best_points[1]
-        film_b, density_b = best_points[2], best_points[3]
+        logexp_a, density_a = best_points[0], best_points[1]
+        logexp_b, density_b = best_points[2], best_points[3]
         # Calculate contrast index using the log difference
-        contrast_index = (density_b - density_a) / (film_b - film_a)
+        contrast_index = (density_b - density_a) / (logexp_b - logexp_a)
         print(f"R² value for contrast index calculation: {best_r_value**2:.4f}")
         return contrast_index, best_points
     
     print("Could not find a suitable linear region with 5 points (R² > 0.98)")
     return None, None
 
-def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name):
+def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name, dmin, dmax):
     # Read the CSV files
     step_wedge = pd.read_csv(step_wedge_file)
     test_film = pd.read_csv(test_film_file)
@@ -74,7 +74,10 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name):
     print(f"Test film measurements: {len(test_film)}")
     print(f"Using first {min_measurements} measurements")
     # Calculate ISO speed
-    min_density = min(y_values)
+    if dmin:
+        min_density = dmin
+    else:
+        min_density = min(y_values)
     target_density = min_density + 0.1
     
     # Find the x value (Log E) where density is closest to target_density
@@ -85,7 +88,7 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name):
     iso_speed = int(800 / (10 ** log_e_at_target))
     
     # Create the plot
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(14, 10))
     
     # Plot the characteristic curve
     ax.plot(x_values, y_values, 'bo-', label='Film Response')
@@ -108,7 +111,15 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name):
 
     # Set logarithmic scale for x-axis
     plt.semilogx()
-    
+    ax.xaxis.set_major_formatter(plt.ScalarFormatter())
+    ax.xaxis.set_minor_formatter(plt.ScalarFormatter())
+    ax.xaxis.set_major_locator(plt.LogLocator(base=10.0))
+    ax.xaxis.set_minor_locator(plt.LogLocator(base=10.0, subs=np.arange(2, 10)))
+    ax.xaxis.set_tick_params(which='minor', labelsize=8)
+
+    # Ensure all tick labels are visible
+    plt.setp(ax.get_xticklabels(), rotation=15, ha='right')
+
     # Customize the plot
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.xlabel('Log E (lux-seconds)')
@@ -117,8 +128,12 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name):
     plt.legend()
     
     # Add density reference lines
-    plt.axhline(y=0.3, color='gray', linestyle='--', alpha=0.5, label='Toe')
-    plt.axhline(y=2.0, color='gray', linestyle='--', alpha=0.5, label='Shoulder')
+    plt.axhline(y=min_density, color='gray', linestyle='--', alpha=0.5, label='Toe')
+    if (dmax):
+        max_density = dmax
+    else:
+        max_density = max(y_values)
+    plt.axhline(y=max_density, color='gray', linestyle='--', alpha=0.5, label='Shoulder')
 
     # Adjust layout to make room for contrast index text
     plt.subplots_adjust(bottom=0.15)
@@ -127,15 +142,18 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name):
 
 def main():
     parser = argparse.ArgumentParser(description='Film Densitometry Plot Generator')
-    parser.add_argument('ev', type=float, help='Exposure Value (EV)')
-    parser.add_argument('exposure_time', type=float, help='Exposure time in seconds')
-    parser.add_argument('step_wedge_file', type=str, help='Path to step wedge CSV file')
-    parser.add_argument('test_film_file', type=str, help='Path to test film CSV file')
-    parser.add_argument('name', type=str, help='Name of the test film')
+    parser.add_argument('-ev', type=float, help='Exposure Value (EV)', required=True)
+    parser.add_argument('-t', '--exposure_time', type=float, help='Exposure time in seconds', required=True)
+    parser.add_argument('-s', '--step_wedge', type=str, help='Path to step wedge CSV file', required=True)
+    parser.add_argument('-f', '--film', type=str, help='Path to test film CSV file', required=True)
+    parser.add_argument('-n', '--name', type=str, help='Name of the test film', required=True)
+    parser.add_argument('-d', '--dmin', type=float, help='Minimum density value for the film', required=True)
+    parser.add_argument('-dx', '--dmax', type=float, help='Minimum density value for the film', required=False)
+
     args = parser.parse_args()
     
-    plot_densitometry(args.step_wedge_file, args.test_film_file, 
-                     args.ev, args.exposure_time, args.name)
+    plot_densitometry(args.step_wedge, args.film, 
+                     args.ev, args.exposure_time, args.name, args.dmin, args.dmax)
     print(f"Plot generated for {args.name} with EV: {args.ev} and exposure time: {args.exposure_time}s")
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ def calculate_log_e(ev, exposure_time):
     lux = 2.5 * (2 ** ev)
     return np.log10(lux * 1000 * exposure_time)
 
-def calculate_contrast_index(x_values, y_values, window_size=7):
+def calculate_contrast_index(x_values, y_values, window_size=11):
     """Calculate contrast index using sliding window to find most linear portion in log scale"""
     if len(x_values) < window_size or len(y_values) < window_size:
         print(f"Warning: Not enough data points. Need at least {window_size} points")
@@ -51,6 +51,26 @@ def calculate_contrast_index(x_values, y_values, window_size=7):
     print("Could not find a suitable linear region with 5 points (R² > 0.98)")
     return None, None
 
+def calculate_average_gradient(x_values, y_values, dmin):
+    """Calculate average gradient between Dmin+0.1 and Dmin+0.6"""
+    lower_density = dmin + 0.1
+    upper_density = dmin + 0.6
+
+    # Find closest indices
+    idx1 = np.abs(y_values - lower_density).argmin()
+    idx2 = np.abs(y_values - upper_density).argmin()
+
+    if idx1 == idx2:
+        print("Warning: Could not find two distinct points for average gradient.")
+        return None
+
+    log_e1 = x_values[idx1]
+    log_e2 = x_values[idx2]
+
+    grad = (y_values[idx2] - y_values[idx1]) / (log_e2 - log_e1)
+
+    return grad
+
 def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name, dmin, dmax):
     # Read the CSV files
     step_wedge = pd.read_csv(step_wedge_file)
@@ -80,25 +100,64 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name, 
         min_density = min(y_values)
     target_density = min_density + 0.1
     
-    # Find the x value (Log E) where density is closest to target_density
-    closest_idx = np.abs(y_values - target_density).argmin()
-    log_e_at_target = x_values[closest_idx]
+    above = np.where(y_values >= target_density)[0]
+    below = np.where(y_values < target_density)[0]
+
+    if len(above) > 0 and len(below) > 0:
+        idx_above = above[0]
+        idx_below = below[-1]
+        # Linear interpolation
+        x1, y1 = x_values[idx_below], y_values[idx_below]
+        x2, y2 = x_values[idx_above], y_values[idx_above]
+        if x2 != x1:
+            log_e_at_target = x1 + (target_density - y1) * (x2 - x1) / (y2 - y1)
+        else:
+            log_e_at_target = x1  # fallback if points are the same
+    else:
+        # Fallback to closest if interpolation is not possible
+        closest_idx = np.abs(y_values - target_density).argmin()
+        log_e_at_target = x_values[closest_idx]
     
     # Calculate ISO speed: 800/10^LogE
     iso_speed = int(800 / (10 ** log_e_at_target))
     
+    # Calculate average gradient
+    avg_grad = calculate_average_gradient(x_values, y_values, min_density)
+
+    if avg_grad:
+        iso_ok = 0.62 <= avg_grad <= 0.70
+        print(f"Average Gradient: {avg_grad:.3f} ({'OK' if iso_ok else 'Out of ISO Range 0.62-0.70'})")
+    else:
+        print("Could not calculate average gradient.")
+
     # Create the plot
     fig, ax = plt.subplots(figsize=(14, 10))
     
+    # Add a marker for the ISO speed point (speed point)
+    ax.scatter([log_e_at_target], [target_density], color='orange', s=100, zorder=5, label='ISO Speed Point')
+    ax.annotate(f"Speed Point\n(LogE={log_e_at_target:.2f}, D={target_density:.2f})",
+                (log_e_at_target, target_density),
+                textcoords="offset points", xytext=(10,-20), ha='left', color='orange', fontsize=7,
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.7))
+
     # Plot the characteristic curve
     ax.plot(x_values, y_values, 'bo-', label='Film Response')
-    
+    min_grad = 0.62
+    max_grad = 0.70
+
+    if avg_grad < min_grad:
+        grad_status = "Too Low"
+    elif avg_grad > max_grad:
+        grad_status = "Too High"
+    else:
+        grad_status = "OK"
+
     # Add contrast index and ISO speed values below the graph
     if contrast_index and best_points:
         plt.figtext(0.5, 0.05, 
-                   f'Contrast Index: {contrast_index:.2f}    ISO Speed: {iso_speed}', 
-                   ha='center', va='center',
-                   bbox=dict(facecolor='white', alpha=0.8))
+                    f'Contrast Index: {contrast_index:.2f}    ISO Speed: {iso_speed}    Avg. Gradient: {avg_grad:.2f} ({grad_status})', 
+                    ha='center', va='center',
+                    bbox=dict(facecolor='white', alpha=0.8))
         # Plot the line segment used for contrast index
         ax.plot([best_points[0], best_points[2]], 
                 [best_points[1], best_points[3]], 
@@ -108,6 +167,8 @@ def plot_densitometry(step_wedge_file, test_film_file, ev, exposure_time, name, 
                    f'ISO Speed: {iso_speed}', 
                    ha='center', va='center',
                    bbox=dict(facecolor='white', alpha=0.8))
+
+
 
     # Set logarithmic scale for x-axis
     plt.semilogx()
